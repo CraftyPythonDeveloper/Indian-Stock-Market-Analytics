@@ -11,8 +11,7 @@ from tensorflow.keras.layers import LSTM
 import numpy
 import concurrent.futures
 import os
-from sqlalchemy.exc import InterfaceError, OperationalError
-
+from sqlalchemy.exc import InterfaceError, OperationalError, ProgrammingError
 
 script_config = pd.read_excel("config.xlsx", sheet_name="script_config", engine='openpyxl')
 database_config = pd.read_excel("config.xlsx", sheet_name="database_config", engine='openpyxl')
@@ -30,6 +29,8 @@ PREDICTION_COLUMN = script_config[script_config["Key"] == "PREDICTION_COLUMN"].V
 # DB config
 SERVER = database_config[database_config["Key"] == "SERVER"].Value.item()
 DATABASE = database_config[database_config["Key"] == "DATABASE"].Value.item()
+DATABASE_DRIVER = database_config[database_config["Key"] == "DATABASE_DRIVER"].Value.item()
+
 
 # database connection
 try:
@@ -38,10 +39,12 @@ try:
                                      f"Database={DATABASE};"
                                      "Trusted_connection=yes")
     engine = create_engine("mssql+pyodbc:///?odbc_connect={}".format(params))
+    conn = engine.connect()
 except InterfaceError:
-    engine = create_engine(f'mssql+pyodbc://{SERVER}/{DATABASE}?trusted_connection=yes&driver=ODBC+Driver+11+for+SQL'
+    engine = create_engine(f'mssql+pyodbc://{SERVER}/{DATABASE}?trusted_connection=yes&driver={DATABASE_DRIVER}'
                            f'+Server')
-conn = engine.connect()
+    conn = engine.connect()
+
 
 # for sqlite
 # engine = create_engine(r"sqlite:///C:\Users\Anon\PycharmProjects\stock_prediction\stock_prediction.db")
@@ -156,7 +159,8 @@ def multiprocess_train(function, query, iterable_list):
         with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
             list(executor.map(function, [query]*len(iterable_list), iterable_list))
     except KeyboardInterrupt as e:
-        print(e)
+        print("Received KeyboardInterrupt. Stopping processes...")
+        executor.shutdown(wait=False)
     return True
 
 
@@ -167,7 +171,7 @@ if __name__ == "__main__":
             ans = input(f"{RESULTS_TABLE} table already exists. Do you want to drop the table? Y/N")
             if ans.lower() == "y":
                 execute_sql(f"drop table {RESULTS_TABLE}", commit=True)
-    except OperationalError:
+    except (OperationalError, ProgrammingError):
         pass
 
     stock_names = [i.symbol for i in execute_sql(f"select distinct(symbol) from {HISTORY_TABLE}").fetchall()]
